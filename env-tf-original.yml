@@ -1,0 +1,15 @@
+name: tf
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - jupyter=1.0.0
+  - matplotlib=3.0.0
+  - mdtraj=1.9.2
+  - msmtools=1.2.3
+  - pip=10.0.1
+  - pyemma=2.5.4
+  - seaborn=0.9.0
+  - tensorflow=2.1.0
+prefix: /home/thomas/anaconda3/envs/tf
+
