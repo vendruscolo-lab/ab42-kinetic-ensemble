@@ -388,7 +388,7 @@ def matrix_inverse(mat):
     
     """
     eigva, eigveca = np.linalg.eigh(mat)
-    inc = eigva > epsilon
+    inc = eigva > vamp.epsilon
     eigv, eigvec = eigva[inc], eigveca[:, inc]
     return eigvec @ np.diag(1. / eigv) @ eigvec.T
 
