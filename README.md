@@ -1,9 +1,9 @@
 # A kinetic ensemble of the Alzheimer's Aβ peptide
 
-This repository contains the full code and some small example data to reproduce our results on the kinetic ensemble of amyloid-β 42.
+This repository contains the full code and some small example data to reproduce our results on the kinetic ensemble of amyloid-β 42. See also the [original implementation](https://github.com/markovmodel/deep_rev_msm) of the constrained VAMPNets.
 
 ## Reproducibility information
-The analysis was performed on a single Google compute engine instance using 12 vCPUs, 78 GB memory and 1x NVIDIA Tesla V100 GPU. The instance used the `c3-deeplearning-tf-ent-2-1-cu100-20200131` image with CUDA 10.0 and tensorflow 2.1, based on Debian 10. Training a single network takes approximately 2 hours on this architecture.
+The analysis was performed on a single Google compute engine instance using 12 vCPUs, 78 GB memory and 1x NVIDIA Tesla V100 GPU. The instance used the `c3-deeplearning-tf-ent-2-1-cu100-20200131` image with CUDA 10.0 and tensorflow 2.1, based on Debian 10. The original environment for this machine is provided in `env-tf-original.yml`. Training a single network takes approximately 2 hours on this architecture.
 
 ## Cloud bucket
 Full data, including trajectories, backcalculated chemical shifts, neural network weights, intermediate data, and example structures can be accessed through a Google cloud bucket using the [`gsutil` tool](https://cloud.google.com/storage/docs/quickstart-gsutil):
