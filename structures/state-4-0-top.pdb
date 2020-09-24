@@ -1,4 +1,4 @@
-REMARK   1 CREATED WITH MDTraj 1.9.3, 2020-04-06
+REMARK   1 CREATED WITH MDTraj 1.9.3, 2020-09-24
 CRYST1   79.786   79.786   79.786  60.00  60.00  90.00 P 1           1 
 MODEL        0
 ATOM      1  N   ASP A   1       9.850  33.960  14.350  1.00  0.00          N   

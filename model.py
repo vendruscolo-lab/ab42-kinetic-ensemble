@@ -1,16 +1,6 @@
 #!/usr/bin/env python
 # coding: utf-8
 
-# Training params
-ratio = 0.9          # Train-Test split ratio
-attempts = 20        # Number of times to run
-width = 256
-depth = 5
-learning_rate = 5e-2
-dropout = 0.0
-regularization = 1e-8
-
-
 # # Neural network
 # 
 # In this notebook we set up the neural networks with VAMPNet scoring functions and train them for different output sizes and estimate errors by bootstrap aggregation. This notebook can be used with `papermill` to run all cells automatically with given parameters. We first define the imports and useful utility functions.
@@ -447,7 +437,7 @@ MaybeListType = Union[List[T], T]
 NNDataType = Tuple[List[np.ndarray], np.ndarray]
 MaybePathType = Union[Path, str]
 
-FRAMES, DIMENSIONS, FIRST, LAST = 0, 1, 0, -1
+FRAMES, DIMENSIONS, FIRST, LAST, TIME, TIME_PLUS_LAG = 0, 1, 0, -1, 0, 1
 
 
 # In[12]:
@@ -757,6 +747,8 @@ class DataGenerator:
         xttau_shuf = []
         indices = self._generate_indices(lag)
 
+        selected_indices = []
+        total_points = 0
         for i, traj in enumerate(self.data):
             n_points = traj.shape[FRAMES]
 
@@ -768,6 +760,12 @@ class DataGenerator:
             xttau = traj[lag:]
             xt_shuf.append(xt[indices[i]])
             xttau_shuf.append(xttau[indices[i]])
+            
+            # Collect all selected indices for debugging
+            selected_indices.append(indices[i] + total_points)
+            total_points += n_points
+        
+        self._selected_indices = np.concatenate(selected_indices)
 
         xt = np.vstack(xt_shuf).astype(np.float32)
         xttau = np.vstack(xttau_shuf).astype(np.float32)
@@ -778,6 +776,7 @@ class DataGenerator:
         # Reshuffle to remove trajectory level bias
         inds = self._full_indices[self._full_indices < eff_len]
         xt, xttau = xt[inds], xttau[inds]
+        self._selected_indices = self._selected_indices[inds][:train_len]
 
         return DataSet(
             [xt[:train_len], xttau[:train_len]],
@@ -785,7 +784,84 @@ class DataGenerator:
             np.zeros((train_len, 2 * n), dtype=np.float32),
             np.zeros((eff_len - train_len, 2 * n), dtype=np.float32))
 
+    
+class AggregatorMixin:
+    def agg(self, attr: str, func: Callable[[Sequence[T]], T]) -> T:
+        return func(comp.__getattribute__(attr) for comp in self._components)
+    
+    def is_consistent(self, attr: str) -> bool:
+        return len(set(comp.__getattribute__(attr) for comp in self._components)) == 1
 
+def concat(data: Sequence[Sequence[T]]) -> List[T]:
+    return list(itertools.chain(*data))
+
+
+class MultiGenerator(AggregatorMixin):
+    def __init__(self, generators: MaybeListType[DataGenerator]):
+        self._components = make_list(generators)
+        assert self.is_consistent("n_dims")
+        
+        if not self.is_consistent("max_frames"):
+            print("WARNING: Inconsistent number of frames for each ensemble!")
+    
+    @property
+    def generators(self) -> List[DataGenerator]:
+        return self._components
+    
+    @property
+    def data(self) -> List[np.ndarray]:
+        return self.agg("data", concat)
+    
+    @property
+    def n_dims(self) -> int:
+        return self.generators[FIRST].n_dims
+    
+    @property
+    def n_points(self) -> int:
+        return self.agg("n_points", sum)
+    
+    @property
+    def n_traj(self) -> int:
+        return self.agg("n_traj", sum)
+    
+    @property
+    def traj_lengths(self) -> int:
+        return self.agg("traj_lengths", concat)
+    
+    @property
+    def data_flat(self) -> np.ndarray:
+        return np.vstack(self.data)
+    
+    def regenerate_indices(self):
+        for gen in self.generators:
+            gen.regenerate_indices()
+
+    def save(self, filenames: Sequence[MaybePathType]):
+        for gen, filename in zip(self.generators, filenames):
+            gen.save(filename)
+    
+    def load(self, filenames: Sequence[MaybePathType]):
+        for gen, filename in zip(self.generators, filenames):
+            gen.load(filename)
+    
+    def __call__(self, n: int, lag: int) -> DataSet:
+        datasets = [gen(n=n, lag=lag) for gen in self.generators]
+        trains = [np.concatenate([ds.trains[TIME] for ds in datasets]),
+                  np.concatenate([ds.trains[TIME_PLUS_LAG] for ds in datasets])]
+        valids = [np.concatenate([ds.valids[TIME] for ds in datasets]),
+                  np.concatenate([ds.valids[TIME_PLUS_LAG] for ds in datasets])]
+        train_size = trains[TIME].shape[FRAMES]
+        valid_size = valids[TIME].shape[FRAMES]
+        y_train = np.zeros((train_size, 2 * n))
+        y_valid = np.zeros((valid_size, 2 * n))
+        train_indices = np.random.choice(np.arange(train_size), size=train_size, replace=False)
+        valid_indices = np.random.choice(np.arange(valid_size), size=valid_size, replace=False)
+        return DataSet(
+            [trains[TIME][train_indices], trains[TIME_PLUS_LAG][train_indices]],
+            [valids[TIME][valid_indices], valids[TIME_PLUS_LAG][valid_indices]],
+            y_train, y_valid
+        )
+    
 # In[15]:
 
 
@@ -903,7 +979,7 @@ class NNModel:
                  loss: MaybeListType[Callable[..., Any]]=None,
                  metric: MaybeListType[Callable[..., Any]]=None,
                  learning_rate: MaybeListType[float]=None,
-                 batchsize: int=5000,
+                 batchsize: int=10000,
                  epochs: int=100,
                  callback: Callback=None,
                  save_initial_weights=False,
@@ -1222,8 +1298,8 @@ def _build_model(n_input: int, n_output: int, learning_rate: float=1e-4,
         metric=[vamp.metric_VAMP],
         learning_rate=[learning_rate * f for f in (1.0, 0.02)],
         callback=EarlyStopping("val_metric_VAMP", mode="max", min_delta=0.001,
-                               patience=5, restore_best_weights=True),
-        verbose=0)
+                               patience=20, restore_best_weights=True),
+        verbose=1)
 
     # Auxiliary inputs
     chil_in, chir_in = [Input(shape=(n_output,)) for _ in range(2)]
@@ -1258,19 +1334,24 @@ def _build_model(n_input: int, n_output: int, learning_rate: float=1e-4,
 
     # Build training models, we need to be very careful with batchsizes:
     # https://github.com/keras-team/keras/issues/12400
-    early = EarlyStopping("val_loss", patience=10, mode="min", restore_best_weights=True)
     models["all"] = NNModel(
         Model(inputs=[xti, xli], outputs=Ve_out),
         loss=loss_vampe, learning_rate=learning_rate * lr_factor,
-        callback=early, epochs=KoopmanModel.n_epoch_aux)
+        callback=EarlyStopping("val_loss", patience=50,
+            mode="min", restore_best_weights=True),
+        epochs=KoopmanModel.n_epoch_aux, verbose=1)
     models["both"] = NNModel(
         Model(inputs=[chil_in, chir_in], outputs=Ve_out_b),
         loss=loss_vampe, learning_rate=5e-4,
-        callback=early, epochs=KoopmanModel.n_epoch_aux, batchsize=-1)
+        callback=EarlyStopping("val_loss", patience=100,
+            mode="min", restore_best_weights=True),
+        epochs=KoopmanModel.n_epoch_aux, batchsize=-1)
     models["S"] = NNModel(
         Model(inputs=[v_in, C00_in, C11_in, C01_in, sigma_in], outputs=Ve_out_s),
         loss=loss_vampe, learning_rate=0.1,
-        callback=early, epochs=KoopmanModel.n_epoch_aux, batchsize=-1)
+        callback=EarlyStopping("val_loss", patience=100,
+            mode="min", restore_best_weights=True),
+        epochs=KoopmanModel.n_epoch_aux, batchsize=-1, verbose=0)
 
     # Build prediction models
     models["inp"] = NNModel(Model(inputs=[chil_in, chir_in], outputs=[
@@ -1333,6 +1414,7 @@ class KoopmanModel:
         self._models = None
         self._chi_weights = None
         self._k_cache = {}
+        self._max_iter = 20
         
         # Training and validation data
         self._generator = None
@@ -1420,6 +1502,9 @@ class KoopmanModel:
         self._generator = generator
         self.n_input = generator.n_dims
         self.data = self.generator(self.n_output, self.network_lag)
+        if self._models is None:
+            self._models = _build_model(self.n_input, self.n_output,
+                                        verbose=self.verbose, **self.nnargs)
     
     @property
     def lag(self) -> int:
@@ -1450,6 +1535,7 @@ class KoopmanModel:
         # Train auxiliary and full model
         self._models["S"].compile_fit(s_data.train, s_data.valid)
         self._models["both"].compile_fit(chi_data.train, chi_data.valid)
+        self._log("Lag loss: {0}".format(self._models["S"]._history[0].history["val_loss"][-1]))
         self._lag = lag
         
         # Make sure we recompute any observables
@@ -1555,6 +1641,7 @@ class KoopmanModel:
         # Train auxiliary models only
         self._log("Training auxiliary network...")
         self._models["both"].compile_fit(chi_data.train, chi_data.valid)
+        self._log("Both valid loss: {0}".format(self._models["both"]._history[0].history["val_loss"][-1]))
         
         # Train the whole network
         self._log("Training full network...")
@@ -1565,8 +1652,8 @@ class KoopmanModel:
         """Train the auxiliary constraint model in a loop."""
         # Needs a trained vanilla VAMPNet
         assert self.chi_estimated and self.aux_estimated
-        
-        score = score_prev = 0.0
+
+        score, score_prev = 0.0, 0.0
         weights = self._models["all"].weights
         
         self._log("Setting up auxiliary training loop...")
@@ -1574,25 +1661,27 @@ class KoopmanModel:
         self._models["both"].compile()
         self._models["all"].compile()
         
-        iteration = 0
-        while score >= score_prev:
+        for i in range(self._max_iter):
             chi_data = self._update_auxiliary_weights(reset_weights=False)
             self._models["both"].fit(chi_data.train, chi_data.valid)
+            self._log("Both valid loss: {0}".format(self._models["both"]._history[0].history["val_loss"][-1]))
             self._models["all"].fit(self.data.train, self.data.valid)
             score = -self._models["all"].evaluate(self.data.valid)
             
-            self._log("Iteration {0}: Score: {1}".format(iteration, score))
+            self._log("Iteration {0}: Score: {1}".format(i, score))
             
-            if score > score_prev:
-                score_prev = score
-                weights = self._models["all"].weights
-            iteration += 1
+            if score <= score_prev:
+                break
+                
+            score_prev = score
+            weights = self._models["all"].weights
         
         # Final fit
         self._log("Performing final fit...")
         self._models["all"].weights = weights
         chi_data = self._update_auxiliary_weights(reset_weights=False)
         self._models["both"].fit(chi_data.train, chi_data.valid)
+        self._log("Both valid loss: {0}".format(self._models["both"]._history[0].history["val_loss"][-1]))
 
     def save(self, filename: MaybePathType):
         """
@@ -1643,6 +1732,10 @@ class KoopmanModel:
                 self.n_input, self.n_output, verbose=self.verbose, **self.nnargs)
             for k, model in self._models.items():
                 model.load(read["models/{0}".format(k)])
+
+            # Make sure the initial weights are set
+            self._chi_weights = self._models["chi"].weights
+            self.chi_estimated = True
     
     def load_chi_weights(self, filename: MaybePathType):
         """
