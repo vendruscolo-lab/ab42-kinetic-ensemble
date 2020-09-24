@@ -25,5 +25,6 @@ The easiest way to try out the notebooks is by using [`conda`](https://www.anaco
 - `msm-vampe-training.ipynb`: Training code, can be run with [`papermill`](https://papermill.readthedocs.io/en/latest/) and the `env-tf.yml` environment.
 - `msm-vampe-convergence.ipynb`: Simple convergence test using subsets of the trajectory data with the trained models. Run with the `env-tf.yml` environment.
 - `msm-vampe-analysis.ipynb`: Full analysis and plots of the ensemble, run with the `env-analysis.yml` environment.
+- `msm-classic.ipynb`: Classic MSM building attempt, run with the `env-msmbuilder.yml` environment.
 - `model.py`: The neural network model code.
 - `data.py`: The data generators and handlers without any tensorflow related code, for `msm-vampe-analysis.ipynb`.
